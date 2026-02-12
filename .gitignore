@@ -1,0 +1,21 @@
+# Build outputs
+build/
+
+# AVR artifacts (in case any are generated outside build/)
+*.o
+*.elf
+*.hex
+*.map
+*.lss
+*.lst
+*.sym
+*.a
+
+# macOS
+.DS_Store
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*~
