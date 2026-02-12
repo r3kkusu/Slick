@@ -1,80 +1,94 @@
-/*
- * ATmega328P: LED blink (PB0) + SG90 Servo control (PB1/OC1A)
- * - 16MHz external crystal
- * - Servo: 50Hz PWM using Timer1 (hardware PWM, stable)
- *
- * Wiring:
- * - LED: PB0 (DIP pin 14) -> 220Ω -> LED anode, LED cathode -> GND
- * - Servo signal: PB1/OC1A (DIP pin 15) -> servo signal (orange)
- * - Servo power: external 5V battery/regulator (red=+5V, brown=GND)
- * - IMPORTANT: servo GND must connect to ATmega GND
- *
- * Build with: -DF_CPU=16000000UL
- */
-
 #ifndef F_CPU
 #define F_CPU 16000000UL
 #endif
 
 #include <avr/io.h>
+#include <avr/interrupt.h>
 #include <util/delay.h>
+#include <stdint.h>
 
-// Timer1 config:
-// Prescaler 8 => timer tick = 16MHz/8 = 2MHz => 0.5us per tick
-// 20ms period = 20000us => 20000 / 0.5 = 40000 ticks
-#define SERVO_TOP_TICKS 40000U
+static volatile uint32_t g_ms = 0;
 
-// Pulse widths for SG90 (typical):
-// 1.0ms = 1000us => 2000 ticks
-// 1.5ms = 1500us => 3000 ticks
-// 2.0ms = 2000us => 4000 ticks
-#define SERVO_MIN_TICKS 2000U
-#define SERVO_MID_TICKS 3000U
-#define SERVO_MAX_TICKS 4000U
-
-static void servo_init(void) {
-    // PB1 (OC1A) as output
-    DDRB |= _BV(DDB1);
-
-    // Fast PWM, mode 14: WGM13:WGM10 = 1110 (TOP = ICR1)
-    // Clear OC1A on compare match, set at BOTTOM (non-inverting)
-    TCCR1A = _BV(COM1A1) | _BV(WGM11);
-    TCCR1B = _BV(WGM13) | _BV(WGM12) | _BV(CS11); // prescaler = 8
-
-    ICR1 = SERVO_TOP_TICKS;      // 20ms period
-    OCR1A = SERVO_MID_TICKS;     // start at center (1.5ms)
+ISR(TIMER2_COMPA_vect) {
+    g_ms++;
 }
 
-static void servo_set_ticks(uint16_t ticks) {
-    // clamp to safe range
-    if (ticks < SERVO_MIN_TICKS) ticks = SERVO_MIN_TICKS;
-    if (ticks > SERVO_MAX_TICKS) ticks = SERVO_MAX_TICKS;
-    OCR1A = ticks;
+static uint32_t millis(void) {
+    uint32_t m;
+    uint8_t s = SREG;
+    cli();
+    m = g_ms;
+    SREG = s;
+    return m;
+}
+
+static void timer2_init_1ms(void) {
+    // Timer2 CTC, prescaler 64:
+    // 16MHz/64 = 250kHz => 4us/tick, 1ms => 250 ticks => OCR2A = 249
+    TCCR2A = (1 << WGM21);
+    TCCR2B = (1 << CS22);   // prescaler 64
+    OCR2A  = 249;
+    TCNT2  = 0;
+    TIMSK2 = (1 << OCIE2A);
+}
+
+// Variable-safe delay in microseconds (works because _delay_us(1) is constant)
+static void delay_us_var(uint16_t us) {
+    while (us--) _delay_us(1);
+}
+
+// --- Servo pulse generator (called once every 20ms by scheduler) ---
+static uint16_t g_servo_us = 1500;
+
+static void servo_pulse_frame(void) {
+    PORTB |= _BV(PORTB1);
+    delay_us_var(g_servo_us);     // <-- variable-safe
+    PORTB &= ~_BV(PORTB1);
+}
+
+static uint8_t due(uint32_t now, uint32_t *last, uint32_t period_ms) {
+    if ((uint32_t)(now - *last) >= period_ms) {
+        *last = now;
+        return 1;
+    }
+    return 0;
 }
 
 int main(void) {
-    // LED on PB0
+    // LED PB0 (DIP pin 14)
     DDRB |= _BV(DDB0);
-    PORTB &= ~_BV(PORTB0);
 
-    // Servo on PB1/OC1A
-    servo_init();
+    // Servo PB1 (DIP pin 15)
+    DDRB |= _BV(DDB1);
+    PORTB &= ~_BV(PORTB1);
+
+    timer2_init_1ms();
+    sei();
+
+    uint32_t last_led = 0;
+    uint32_t last_servo_step = 0;
+    uint32_t last_servo_frame = 0;
+
+    const uint16_t pos_us[] = {1000, 1500, 2000, 1500};
+    uint8_t pos_i = 0;
 
     while (1) {
-        // LED blink
-        PORTB ^= _BV(PORTB0);
+        uint32_t now = millis();
 
-        // Servo move pattern (each step 1 second)
-        servo_set_ticks(SERVO_MIN_TICKS); // ~0°
-        _delay_ms(1000);
+        // 50Hz servo signal: one pulse every 20ms
+        if (due(now, &last_servo_frame, 20)) {
+            servo_pulse_frame();
+        }
 
-        servo_set_ticks(SERVO_MID_TICKS); // ~90°
-        _delay_ms(1000);
+        // Blink LED every 1000ms
+        if (due(now, &last_led, 1000)) {
+            PORTB ^= _BV(PORTB0);
+        }
 
-        servo_set_ticks(SERVO_MAX_TICKS); // ~180°
-        _delay_ms(1000);
-
-        servo_set_ticks(SERVO_MID_TICKS); // ~90°
-        _delay_ms(1000);
+        // Change servo position every 1000ms
+        if (due(now, &last_servo_step, 1000)) {
+            g_servo_us = pos_us[pos_i];
+            pos_i = (uint8_t)((pos_i + 1) & 3);
+        }
     }
 }
