@@ -1,4 +1,5 @@
 #include "drivers/drv_servo_sg90.h"
+#include "drivers/servo_math.h"
 #include "hal/hal_gpio.h"
 #include <util/delay.h>
 
@@ -18,9 +19,7 @@ void sg90_init(sg90_servo_t *s, uint8_t port_b_bit) {
 }
 
 void sg90_set_us(sg90_servo_t *s, uint16_t us) {
-    if (us < s->min_us) us = s->min_us;
-    if (us > s->max_us) us = s->max_us;
-    s->pulse_us = us;
+    s->pulse_us = servo_clamp_us(us, s->min_us, s->max_us);
 }
 
 void sg90_frame_20ms(const sg90_servo_t *s) {

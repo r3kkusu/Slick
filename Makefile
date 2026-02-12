@@ -4,6 +4,7 @@
 #   config/
 #   include/
 #   src/ (can contain subfolders: hal/, drivers/, kernel/, app/)
+#   tests/
 #   build/   (generated)
 #
 # Usage:
@@ -11,6 +12,7 @@
 #   make flash          # flashes using USBasp (uses B?=200 by default)
 #   make flash B=10     # faster ISP clock (if stable)
 #   make upload         # build + flash (one command)
+#   make test           # runs host-based unit tests (PC)
 #   make fuses-read     # read lfuse/hfuse/efuse
 #   make fuses-16mhz    # set fuses for external 16MHz crystal (UNO-like)
 #   make clean
@@ -46,7 +48,16 @@ SRCS := $(shell find src -name '*.c')
 ELF  := $(BUILD_DIR)/$(TARGET).elf
 HEX  := $(BUILD_DIR)/$(TARGET).hex
 
-.PHONY: all clean flash upload fuses-read fuses-16mhz
+# ---------------- Host-based unit tests (runs on your PC) ----------------
+HOST_CC  := cc
+TEST_BIN := $(BUILD_DIR)/tests
+
+# Only include "pure" logic modules here (no AVR register code)
+TEST_SRCS := $(shell find tests -name '*.c') \
+             src/kernel/scheduler_logic.c \
+             src/drivers/servo_math.c
+
+.PHONY: all clean flash upload test fuses-read fuses-16mhz
 
 all: $(HEX)
 
@@ -65,6 +76,11 @@ flash: $(HEX)
 
 # Build + flash (override bitclock if needed: make upload B=10)
 upload: all flash
+
+# Run unit tests on host (PC)
+test: $(BUILD_DIR)
+	$(HOST_CC) -O0 -g -Wall -Iinclude -Iconfig -o $(TEST_BIN) $(TEST_SRCS)
+	./$(TEST_BIN)
 
 # Read fuses (safe)
 fuses-read:
